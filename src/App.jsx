@@ -1,207 +1,301 @@
-import React, { useState } from 'react';
-import { Share2, ShoppingBag } from 'lucide-react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Environment, ContactShadows, Center } from '@react-three/drei';
-import { Model } from './Glasses';
+import React, { useState, useCallback, Suspense, useRef } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { useProgress, OrbitControls, Environment, ContactShadows, Center, Html, useGLTF } from '@react-three/drei';
+import { Share2, ShoppingBag, Check } from 'lucide-react';
+import './App.css';
+
+// --- YOUR EXTERNAL ARCHITECTURE ---
+import { Model as GlassesModel } from './Glasses';
 import { RingModel } from './Ring';
 import { ComplexRingModel } from './Complex_ring';
-// Add Vignette and SMAA to your postprocessing import
-import { EffectComposer, Bloom, Vignette, SMAA } from '@react-three/postprocessing';
+import { DEFAULT_GLASSES_STATE, DEFAULT_RING_STATE, DEFAULT_COMPLEX_STATE } from './productData';
+import ComplexConfigurator from './ComplexConfigurator';
+import RingConfigurator from './RingConfigurator';
+import GlassesConfigurator from './GlassesConfigurator';
 
-function HDRing() {
+// ----------------------------------------------------------------------------
+// STATIC DATA
+// ----------------------------------------------------------------------------
+const PRODUCT_DATA = {
+  glasses: { subtitle: 'Premium Series', title: 'Apex Aviators', description: 'Ultra-lightweight polarized sunglasses. Fully customizable.', price: '15,000', modelScale: 1.5, minDistance: 2, maxDistance: 6 },
+  jewelry: { subtitle: 'Classic Collection', title: 'The Imperial Solitaire', description: 'Flawless clarity. 18k solid gold band.', price: '250,000', modelScale: 0.1, minDistance: 2, maxDistance: 6 },
+  complex_jewelry: { subtitle: 'Bespoke Showroom', title: 'Onyx & Platinum Pavé', description: 'Massive Onyx centerpiece with pavé diamonds.', price: '850,000', modelScale: 10, modelRotation: [Math.PI / -2, 0, 0], minDistance: 3, maxDistance: 10 }
+};
+
+// ----------------------------------------------------------------------------
+// SUB-COMPONENTS
+// ----------------------------------------------------------------------------
+function CanvasLoader() {
+  const { active, progress } = useProgress();
+  if (!active) return null;
   return (
-    <group scale={3} position={[0, -0.2, 0]}>
-      <mesh rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.4, 0.08, 64, 128]} />
-        <meshStandardMaterial color="#FFD700" metalness={1} roughness={0.05} envMapIntensity={2} />
-      </mesh>
-      <mesh position={[0, 0.45, 0]}>
-        <octahedronGeometry args={[0.18, 2]} />
-        {/* We aren't using this placeholder anymore since you have the real models, but keeping it so your code doesn't break if you call it */}
-      </mesh>
-    </group>
-  );
-}
-
-// --- THE MAIN APP UI ---
-function App() {
-  const [activeTab, setActiveTab] = useState('jewelry');
-  const [activeColor, setActiveColor] = useState({ name: 'Matte Black', hex: '#111827' });
-
-  // 1. FIXED: Added the missing colors array back!
-  const colors = [
-    { name: 'Matte Black', hex: '#111827' },
-    { name: 'Titanium Silver', hex: '#9CA3AF' },
-    { name: 'Tortoise Shell', hex: '#8B4513' }
-  ];
-
-  // 2. FIXED: Added the missing handleShare function!
-  const handleShare = () => {
-    const url = `${window.location.origin}?model=${activeTab}`;
-    navigator.clipboard.writeText(url);
-    alert('Your IbtikarZ link has been copied to your clipboard!');
-  };
-
-  const handleTabSwitch = (tab) => {
-    if (tab === 'complex_jewelry') {
-      const proceed = window.confirm(
-        "VIP SHOWROOM WARNING:\n\nThis is a hyper-realistic, high-poly 3D asset with complex optical physics. It requires a dedicated GPU to render smoothly and may take a moment to load.\n\nDo you wish to proceed?"
-      );
-      if (!proceed) return;
-    }
-    setActiveTab(tab);
-  };
-
-  const productData = {
-    glasses: {
-      subtitle: 'IBTIKARZ PREMIUM SERIES',
-      title: 'Apex Aviators',
-      description: 'Ultra-lightweight polarized sunglasses designed for maximum durability. Customize your frame and lenses below to see them in real-time 3D.',
-      price: '15,000',
-      showColorPicker: true
-    },
-    jewelry: {
-      subtitle: 'CLASSIC COLLECTION',
-      title: 'The Imperial Solitaire',
-      description: 'Flawless clarity. Crafted with a heavy 18k solid gold band and a mathematically perfect diamond cut to maximize light refraction.',
-      price: '250,000',
-      showColorPicker: false
-    },
-    complex_jewelry: {
-      subtitle: 'BESPOKE SHOWROOM',
-      title: 'Onyx & Platinum Pavé',
-      description: 'A massive, light-absorbing Onyx centerpiece flanked by high-fire pavé diamonds. Hand-set in heavy, polished platinum. The ultimate statement piece.',
-      price: '850,000',
-      showColorPicker: false
-    }
-  };
-
-  const activeProduct = productData[activeTab];
-
-  return (
-    <div className="h-screen w-full bg-gray-50 flex flex-col font-sans overflow-hidden">
-
-      {/* THE PIVOT TOGGLE BAR */}
-      <div className="w-full bg-white shadow-sm z-50 py-4 flex justify-center space-x-4 absolute top-0">
-        <button
-          onClick={() => handleTabSwitch('glasses')}
-          className={`px-6 py-2 rounded-full font-medium transition-all ${activeTab === 'glasses' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-        >
-          Apex Aviators
-        </button>
-        <button
-          onClick={() => handleTabSwitch('jewelry')}
-          className={`px-6 py-2 rounded-full font-medium transition-all ${activeTab === 'jewelry' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-        >
-          Classic Solitaire
-        </button>
-        <button
-          onClick={() => handleTabSwitch('complex_jewelry')}
-          className={`px-6 py-2 rounded-full font-medium transition-all ${activeTab === 'complex_jewelry' ? 'bg-black text-white' : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'}`}
-        >
-          Imperial Black Diamond (Ultra HD)
-        </button>
+    <div className="loader-wrapper" role="status" aria-live="polite">
+      <div className="loader-bar-bg">
+        <div className="loader-bar-fill" style={{ width: `${progress}%` }} />
       </div>
-
-      <div className="flex flex-row h-full pt-16">
-
-        {/* LEFT PANEL: The Ultra-HD Canvas */}
-        <div className="w-1/2 h-full relative bg-[#E5E7EB] shadow-inner cursor-grab active:cursor-grabbing">
-          <Canvas
-            camera={{ position: [0, 1, 4], fov: 45 }}
-            dpr={[1.5, 2]}
-            gl={{ antialias: true, powerPreference: "high-performance" }}
-          >
-            <Environment preset="city" />
-            <OrbitControls enablePan={false} enableZoom={true} minDistance={2} maxDistance={6} autoRotate={true} autoRotateSpeed={2} />
-
-            {/* The Toggle Logic */}
-            {activeTab === 'complex_jewelry' ? (
-              <Center position={[0, -0.2, 0]}>
-                <ComplexRingModel scale={10} rotation={[Math.PI / -2, 0, 0]} />
-              </Center>
-            ) : activeTab === 'jewelry' ? (
-              <Center position={[0, -0.2, 0]}>
-                <RingModel scale={0.1} />
-              </Center>
-            ) : (
-              <Center position={[0, -0.3, 0]}>
-                <Model customColor={activeColor.hex} scale={1.5} />
-              </Center>
-            )}
-
-            <spotLight position={[-5, 5, -5]} intensity={1.5} color="#ffffff" />
-
-            {/* 3. FIXED: The shadow array syntax is corrected */}
-            <ContactShadows position={[0, -0.8, 0]} opacity={0.8} scale={5} blur={1} far={2} resolution={1024} />
-          </Canvas>
-        </div>
-
-        {/* RIGHT PANEL: Dynamic UI */}
-        <div className="w-1/2 h-full flex flex-col justify-center px-8 md:px-16 py-12 overflow-y-auto z-10 bg-white shadow-2xl mt-16">
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">
-                {activeProduct.subtitle}
-              </p>
-              <h1 className="text-4xl font-bold text-gray-900">
-                {activeProduct.title}
-              </h1>
-            </div>
-            <button onClick={handleShare} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
-              <Share2 size={20} className="text-gray-700" />
-            </button>
-          </div>
-
-          <p className="text-gray-600 mb-8 leading-relaxed">
-            {activeProduct.description}
-          </p>
-
-          <div className="mb-10">
-            <p className="text-4xl font-light text-gray-900">
-              Rs. {activeProduct.price}
-            </p>
-          </div>
-
-          {activeProduct.showColorPicker && (
-            <div className="mb-10">
-              <p className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wider">
-                Frame Color: <span className="text-gray-500 font-normal">{activeColor.name}</span>
-              </p>
-              <div className="flex space-x-3">
-                {colors.map((color) => (
-                  <button
-                    key={color.name}
-                    onClick={() => setActiveColor(color)}
-                    className={`w-10 h-10 rounded-full border-2 transition-all duration-200 ${activeColor.name === color.name ? 'border-black scale-110 shadow-md' : 'border-transparent hover:scale-105'
-                      }`}
-                    style={{ backgroundColor: color.hex }}
-                    aria-label={`Select ${color.name}`}
-                  />
-                ))}
-              </div>
-
-              <div className="mt-4 flex items-center space-x-3">
-                <p className="text-xs font-medium text-gray-500 uppercase">Custom Color (+Rs. 10,000)</p>
-                <input
-                  type="color"
-                  className="w-8 h-8 rounded cursor-pointer border-0"
-                  onChange={(e) => {
-                    setActiveColor({ name: 'Custom Build', hex: e.target.value });
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          <button className="w-full bg-black text-white py-4 rounded-lg text-lg font-medium flex justify-center items-center space-x-2 hover:bg-gray-800 transition-colors shadow-xl">
-            <ShoppingBag size={20} />
-            <span>Secure Checkout</span>
-          </button>
-        </div>
-      </div>
+      <p className="loader-text">Loading {progress.toFixed(0)}%</p>
     </div>
   );
 }
 
-export default App;
+function SmartOrbitControls({ autoRotate = true, ...props }) {
+  const controlsRef = useRef(null);
+  const [isInteracting, setIsInteracting] = useState(false);
+
+  useFrame((state, delta) => {
+    if (controlsRef.current && autoRotate && !isInteracting) {
+      controlsRef.current.autoRotate = true;
+      controlsRef.current.update(delta);
+    }
+  });
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enablePan={false}
+      enableZoom={true}
+      autoRotate={false}
+      autoRotateSpeed={1.5}
+      onStart={() => setIsInteracting(true)}
+      onEnd={() => setIsInteracting(false)}
+      onContextMenu={(e) => e.preventDefault()}
+      {...props}
+    />
+  );
+}
+
+// THE ROUTER: Passes the correct config down to the right 3D model
+function ModelSelector({ activeTab, glassesConfig, ringConfig, complexConfig, productData }) {
+  const activeProduct = productData[activeTab];
+  const commonProps = { scale: activeProduct.modelScale };
+
+  switch (activeTab) {
+    case 'complex_jewelry':
+      return <ComplexRingModel key="complex" config={complexConfig} {...commonProps} rotation={activeProduct.modelRotation} />;
+    case 'jewelry':
+      return <RingModel key="jewelry" config={ringConfig} {...commonProps} />; // <-- Pass ringConfig here
+    case 'glasses':
+    default:
+      return <GlassesModel key="glasses" config={glassesConfig} {...commonProps} />;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// MAIN APP COMPONENT
+// ----------------------------------------------------------------------------
+export default function App() {
+  // Application State
+  const [activeTab, setActiveTab] = useState('glasses'); // Defaulting to glasses to show off the configurator
+  const [mountModel, setMountModel] = useState(true);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+
+  // Product Configurator State (The Brain)
+  const [glassesConfig, setGlassesConfig] = useState(DEFAULT_GLASSES_STATE);
+  const [ringConfig, setRingConfig] = useState(DEFAULT_RING_STATE);
+  const [complexConfig, setComplexConfig] = useState(DEFAULT_COMPLEX_STATE); // <-- Add this
+
+  // WebGL Context Management
+  const [contextLost, setContextLost] = useState(false);
+  const [canvasKey, setCanvasKey] = useState(0);
+
+  // Toast / Share Management
+  const [toast, setToast] = useState({ visible: false, message: '', type: 'success' });
+  const activeProduct = PRODUCT_DATA[activeTab];
+
+  const showToast = (message, type = 'success') => {
+    setToast({ visible: true, message, type });
+    setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 2500);
+  };
+
+  const handleShare = useCallback(async () => {
+    const shareData = { title: 'Check out this product', text: 'Amazing 3D product viewer', url: window.location.href };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        showToast('Shared successfully!');
+      } else {
+        await navigator.clipboard.writeText(window.location.href);
+        showToast('Link copied!');
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') showToast('Failed to share', 'error');
+    }
+  }, []);
+
+  const handleTabSwitch = useCallback((tab) => {
+    if (tab === activeTab) return;
+    if (navigator.vibrate) navigator.vibrate(10);
+
+    setMountModel(false);
+
+    // Clear caches for seamless memory transitions
+    useGLTF.clear('/glasses-transformed.glb');
+    useGLTF.clear('/ring-transformed.glb');
+    useGLTF.clear('/complex_ring-transformed.glb');
+
+    setActiveTab(tab);
+
+    setTimeout(() => {
+      setMountModel(true);
+    }, 300);
+
+  }, [activeTab]);
+
+  const handleCheckout = useCallback(() => {
+    setIsCheckingOut(true);
+    setTimeout(() => {
+      setIsCheckingOut(false);
+      if (navigator.vibrate) navigator.vibrate([10, 50, 10]);
+    }, 1500);
+  }, []);
+
+  const handleContextLoss = useCallback((event) => {
+    event.preventDefault();
+    console.error('CRITICAL: WebGL context lost. GPU out of memory.');
+    setContextLost(true);
+  }, []);
+
+  const recoverContext = useCallback(() => {
+    setContextLost(false);
+    setCanvasKey(prev => prev + 1);
+  }, []);
+
+  return (
+    <div className="app-wrapper">
+      <div className={`toast ${toast.type} ${toast.visible ? 'visible' : ''}`}>
+        {toast.type === 'success' && <Check size={16} />}
+        <span>{toast.message}</span>
+      </div>
+
+      {/* 3D Canvas Layer */}
+      <div className="canvas-container">
+        <Canvas
+          key={canvasKey} // Safe, stable key
+          camera={{ position: [0, 1, 4], fov: 45, near: 0.1, far: 100 }}
+          dpr={[1, 1.5]}
+          gl={{
+            antialias: true,
+            powerPreference: "high-performance",
+            toneMappingExposure: 1.2,
+            preserveDrawingBuffer: false
+          }}
+          onCreated={({ gl }) => {
+            const canvas = gl.domElement;
+            canvas.addEventListener('webglcontextlost', handleContextLoss, false);
+            return () => canvas.removeEventListener('webglcontextlost', handleContextLoss);
+          }}
+        >
+          {/* SUSPENSE BOUNDARY */}
+          <Suspense fallback={<Html fullscreen><CanvasLoader /></Html>}>
+            {contextLost ? (
+              <Html center>
+                <div className="crash-overlay">
+                  <p>Viewer crashed due to high memory usage.</p>
+                  <button onClick={recoverContext}>Reload 3D Viewer</button>
+                </div>
+              </Html>
+            ) : (
+              <>
+                {/* Automatically change the lighting based on the active tab and configuration */}
+                {/* 1. Static Environment for reflections (Never reloads, no lag) */}
+                <Environment preset="city" background={false} />
+
+                {/* 2. Dynamic Ambient Light (Fills the shadows) */}
+                <ambientLight
+                  color={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientColor : '#ffffff'}
+                  intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientInt : 0.5}
+                />
+
+                {/* 3. Dynamic Spot Light (Creates the dramatic highlights) */}
+                <spotLight
+                  position={[5, 10, 5]}
+                  penumbra={1}
+                  angle={0.3}
+                  castShadow
+                  color={activeTab === 'complex_jewelry' ? complexConfig.environment.spotColor : '#ffffff'}
+                  intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.spotInt : 2}
+                />
+
+                {/* 4. A tiny blue rim light from below to make the diamonds pop */}
+                <pointLight position={[-5, -5, -5]} intensity={0.5} color="#0066ff" />
+
+                <SmartOrbitControls minDistance={activeProduct.minDistance} maxDistance={activeProduct.maxDistance} />
+
+                <Center position={[0, -0.2, 0]}>
+                  {mountModel && (
+                    <ModelSelector
+                      activeTab={activeTab}
+                      glassesConfig={glassesConfig}
+                      ringConfig={ringConfig}
+                      complexConfig={complexConfig}
+                      productData={PRODUCT_DATA}
+                    />
+                  )}
+                </Center>
+
+                <ContactShadows position={[0, -0.8, 0]} opacity={0.4} scale={10} blur={2} far={2} frames={1} />
+              </>
+            )}
+          </Suspense>
+        </Canvas>
+      </div>
+
+      {/* UI Navigation Layer */}
+      <nav className="nav-pill" role="tablist">
+        {['glasses', 'jewelry', 'complex_jewelry'].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => handleTabSwitch(tab)}
+            className={`nav-btn ${activeTab === tab ? 'active' : ''}`}
+          >
+            {tab === 'glasses' ? 'Aviators' : tab === 'jewelry' ? 'Solitaire' : 'Onyx Pavé'}
+          </button>
+        ))}
+      </nav>
+
+      {/* UI Product Card Layer */}
+      <article className="product-card">
+        <div className="product-card-content">
+          <div className="header-row">
+            <div>
+              <p className="subtitle">{activeProduct.subtitle}</p>
+              <h1 className="title">{activeProduct.title}</h1>
+            </div>
+            <button onClick={handleShare} className="share-btn" aria-label="Share">
+              <Share2 size={18} />
+            </button>
+          </div>
+
+          <p className="description">{activeProduct.description}</p>
+          <p className="price">Rs. {activeProduct.price}</p>
+
+          {/* DYNAMIC UI INJECTION */}
+          {activeTab === 'glasses' && (
+            <GlassesConfigurator
+              config={glassesConfig}
+              setConfig={setGlassesConfig}
+            />
+          )}
+
+          {activeTab === 'jewelry' && (
+            <RingConfigurator
+              config={ringConfig}
+              setConfig={setRingConfig}
+            />
+          )}
+
+          {activeTab === 'complex_jewelry' && (
+            <ComplexConfigurator
+              config={complexConfig}
+              setConfig={setComplexConfig}
+            />
+          )}
+
+          <button className="checkout-btn" onClick={handleCheckout} disabled={isCheckingOut} style={{ marginTop: activeTab === 'glasses' ? '24px' : 'auto' }}>
+            {isCheckingOut ? 'Processing...' : <><ShoppingBag size={18} /><span>Secure Checkout</span></>}
+          </button>
+        </div>
+      </article>
+    </div>
+  );
+}
