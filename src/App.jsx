@@ -1,7 +1,7 @@
 import React, { useState, useCallback, Suspense, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useProgress, OrbitControls, Environment, ContactShadows, Center, Html, useGLTF } from '@react-three/drei';
-import { Share2, ShoppingBag, Check, ScanFace } from 'lucide-react';
+import { Share2, ShoppingBag, Check, ScanFace, ChevronDown, ChevronUp } from 'lucide-react';
 import './App.css';
 
 // --- YOUR EXTERNAL ARCHITECTURE ---
@@ -12,7 +12,7 @@ import { DEFAULT_GLASSES_STATE, DEFAULT_RING_STATE, DEFAULT_COMPLEX_STATE } from
 import ComplexConfigurator from './ComplexConfigurator';
 import RingConfigurator from './RingConfigurator';
 import GlassesConfigurator from './GlassesConfigurator';
-import VirtualTryOn from './VirtualTryOn'; // <-- NEW IMPORT
+import VirtualTryOn from './VirtualTryOn';
 
 // ----------------------------------------------------------------------------
 // STATIC DATA
@@ -65,7 +65,6 @@ function SmartOrbitControls({ autoRotate = true, ...props }) {
   );
 }
 
-// THE ROUTER: Passes the correct config down to the right 3D model
 function ModelSelector({ activeTab, glassesConfig, ringConfig, complexConfig, productData }) {
   const activeProduct = productData[activeTab];
   const commonProps = { scale: activeProduct.modelScale };
@@ -89,7 +88,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('glasses');
   const [mountModel, setMountModel] = useState(true);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
-  const [isARMode, setIsARMode] = useState(false); // <-- AR STATE ADDED
+  const [isARMode, setIsARMode] = useState(false);
+  const [isUIHidden, setIsUIHidden] = useState(false); // <-- NEW STATE FOR HIDING UI
 
   // Product Configurator State
   const [glassesConfig, setGlassesConfig] = useState(DEFAULT_GLASSES_STATE);
@@ -129,9 +129,9 @@ export default function App() {
     if (navigator.vibrate) navigator.vibrate(10);
 
     setMountModel(false);
-    setIsARMode(false); // Reset AR mode when switching tabs
+    setIsARMode(false);
+    setIsUIHidden(false); // Ensure UI comes back when switching tabs
 
-    // Clear caches for seamless memory transitions
     useGLTF.clear('/glasses-transformed.glb');
     useGLTF.clear('/ring-transformed.glb');
     useGLTF.clear('/complex_ring-transformed.glb');
@@ -163,6 +163,13 @@ export default function App() {
     setCanvasKey(prev => prev + 1);
   }, []);
 
+  // Handler for the AR Button
+  const toggleARMode = () => {
+    const newARState = !isARMode;
+    setIsARMode(newARState);
+    setIsUIHidden(newARState); // Auto-hide UI when turning on AR, Auto-show when turning off
+  };
+
   return (
     <div className={`app-wrapper ${isARMode && activeTab === 'glasses' ? 'ar-mode' : ''}`}>
       <div className={`toast ${toast.type} ${toast.visible ? 'visible' : ''}`}>
@@ -172,7 +179,7 @@ export default function App() {
 
       {/* 3D Canvas / AR Layer */}
       <div className="canvas-container" style={{ position: 'relative' }}>
-        
+
         {/* AR Tracker OVERLAY */}
         {isARMode && activeTab === 'glasses' && (
           <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 50 }}>
@@ -180,10 +187,8 @@ export default function App() {
           </div>
         )}
 
-        {/* Main 3D Viewer - NEVER unmount this to prevent WebGL Context Leaks, 
-            instead we pause its render loop and hide it structurally */}
         <div style={{
-          width: '100%', 
+          width: '100%',
           height: '100%',
           opacity: (isARMode && activeTab === 'glasses') ? 0 : 1,
           pointerEvents: (isARMode && activeTab === 'glasses') ? 'none' : 'auto'
@@ -193,12 +198,7 @@ export default function App() {
             key={canvasKey}
             camera={{ position: [0, 1, 4], fov: 45, near: 0.1, far: 100 }}
             dpr={[1, 1.5]}
-            gl={{
-              antialias: true,
-              powerPreference: "high-performance",
-              toneMappingExposure: 1.2,
-              preserveDrawingBuffer: false
-            }}
+            gl={{ antialias: true, powerPreference: "high-performance", toneMappingExposure: 1.2, preserveDrawingBuffer: false }}
             onCreated={({ gl }) => {
               const canvas = gl.domElement;
               canvas.addEventListener('webglcontextlost', handleContextLoss, false);
@@ -216,34 +216,15 @@ export default function App() {
               ) : (
                 <>
                   <Environment preset="city" background={false} />
-                  <ambientLight
-                    color={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientColor : '#ffffff'}
-                    intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientInt : 0.5}
-                  />
-                  <spotLight
-                    position={[5, 10, 5]}
-                    penumbra={1}
-                    angle={0.3}
-                    castShadow
-                    color={activeTab === 'complex_jewelry' ? complexConfig.environment.spotColor : '#ffffff'}
-                    intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.spotInt : 2}
-                  />
+                  <ambientLight color={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientColor : '#ffffff'} intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientInt : 0.5} />
+                  <spotLight position={[5, 10, 5]} penumbra={1} angle={0.3} castShadow color={activeTab === 'complex_jewelry' ? complexConfig.environment.spotColor : '#ffffff'} intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.spotInt : 2} />
                   <pointLight position={[-5, -5, -5]} intensity={0.5} color="#0066ff" />
-
                   <SmartOrbitControls minDistance={activeProduct.minDistance} maxDistance={activeProduct.maxDistance} />
-
                   <Center position={[0, -0.2, 0]}>
                     {mountModel && (
-                      <ModelSelector
-                        activeTab={activeTab}
-                        glassesConfig={glassesConfig}
-                        ringConfig={ringConfig}
-                        complexConfig={complexConfig}
-                        productData={PRODUCT_DATA}
-                      />
+                      <ModelSelector activeTab={activeTab} glassesConfig={glassesConfig} ringConfig={ringConfig} complexConfig={complexConfig} productData={PRODUCT_DATA} />
                     )}
                   </Center>
-
                   <ContactShadows position={[0, -0.8, 0]} opacity={0.4} scale={10} blur={2} far={2} frames={1} />
                 </>
               )}
@@ -252,21 +233,23 @@ export default function App() {
         </div>
       </div>
 
-      {/* UI Navigation Layer */}
-      <nav className="nav-pill" role="tablist">
-        {['glasses', 'jewelry', 'complex_jewelry'].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => handleTabSwitch(tab)}
-            className={`nav-btn ${activeTab === tab ? 'active' : ''}`}
-          >
-            {tab === 'glasses' ? 'Aviators' : tab === 'jewelry' ? 'Solitaire' : 'Onyx Pavé'}
-          </button>
-        ))}
-      </nav>
+      {/* UI Navigation Layer (Hide if AR Mode is active and UI is hidden) */}
+      {!isUIHidden && (
+        <nav className="nav-pill" role="tablist">
+          {['glasses', 'jewelry', 'complex_jewelry'].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => handleTabSwitch(tab)}
+              className={`nav-btn ${activeTab === tab ? 'active' : ''}`}
+            >
+              {tab === 'glasses' ? 'Aviators' : tab === 'jewelry' ? 'Solitaire' : 'Onyx Pavé'}
+            </button>
+          ))}
+        </nav>
+      )}
 
       {/* UI Product Card Layer */}
-      <article className="product-card">
+      <article className="product-card" style={{ transition: 'all 0.3s ease-in-out' }}>
         <div className="product-card-content">
           <div className="header-row">
             <div>
@@ -274,11 +257,24 @@ export default function App() {
               <h1 className="title">{activeProduct.title}</h1>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+
+              {/* COLLAPSE / EXPAND UI BUTTON (Only shows in AR mode) */}
+              {isARMode && activeTab === 'glasses' && (
+                <button
+                  onClick={() => setIsUIHidden(!isUIHidden)}
+                  className="share-btn"
+                  aria-label="Toggle Customization"
+                  style={{ width: 'auto', padding: '0 12px', background: '#e5e7eb' }}
+                >
+                  {isUIHidden ? <span style={{ fontSize: '12px', fontWeight: 'bold' }}>Customize</span> : <ChevronDown size={18} />}
+                </button>
+              )}
+
               {/* AR TOGGLE BUTTON */}
               {activeTab === 'glasses' && (
                 <button
-                  onClick={() => setIsARMode(!isARMode)}
+                  onClick={toggleARMode}
                   className="share-btn"
                   aria-label="Virtual Try-On"
                   style={{
@@ -296,25 +292,28 @@ export default function App() {
             </div>
           </div>
 
-          <p className="description">{activeProduct.description}</p>
-          <p className="price">Rs. {activeProduct.price}</p>
+          {/* DYNAMICALLY HIDE EVERYTHING BELOW THE HEADER */}
+          {!isUIHidden && (
+            <div style={{ animation: 'vto-fadein 0.3s ease' }}>
+              <p className="description">{activeProduct.description}</p>
+              <p className="price">Rs. {activeProduct.price}</p>
 
-          {/* DYNAMIC UI INJECTION */}
-          {activeTab === 'glasses' && (
-            <GlassesConfigurator config={glassesConfig} setConfig={setGlassesConfig} />
+              {activeTab === 'glasses' && (
+                <GlassesConfigurator config={glassesConfig} setConfig={setGlassesConfig} />
+              )}
+              {activeTab === 'jewelry' && (
+                <RingConfigurator config={ringConfig} setConfig={setRingConfig} />
+              )}
+              {activeTab === 'complex_jewelry' && (
+                <ComplexConfigurator config={complexConfig} setConfig={setComplexConfig} />
+              )}
+
+              <button className="checkout-btn" onClick={handleCheckout} disabled={isCheckingOut} style={{ marginTop: activeTab === 'glasses' ? '24px' : 'auto' }}>
+                {isCheckingOut ? 'Processing...' : <><ShoppingBag size={18} /><span>Secure Checkout</span></>}
+              </button>
+            </div>
           )}
 
-          {activeTab === 'jewelry' && (
-            <RingConfigurator config={ringConfig} setConfig={setRingConfig} />
-          )}
-
-          {activeTab === 'complex_jewelry' && (
-            <ComplexConfigurator config={complexConfig} setConfig={setComplexConfig} />
-          )}
-
-          <button className="checkout-btn" onClick={handleCheckout} disabled={isCheckingOut} style={{ marginTop: activeTab === 'glasses' ? '24px' : 'auto' }}>
-            {isCheckingOut ? 'Processing...' : <><ShoppingBag size={18} /><span>Secure Checkout</span></>}
-          </button>
         </div>
       </article>
     </div>
