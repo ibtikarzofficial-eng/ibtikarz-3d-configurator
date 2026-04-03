@@ -1,7 +1,7 @@
 import React, { useState, useCallback, Suspense, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useProgress, OrbitControls, Environment, ContactShadows, Center, Html, useGLTF } from '@react-three/drei';
-import { Share2, ShoppingBag, Check } from 'lucide-react';
+import { Share2, ShoppingBag, Check, ScanFace } from 'lucide-react';
 import './App.css';
 
 // --- YOUR EXTERNAL ARCHITECTURE ---
@@ -12,6 +12,7 @@ import { DEFAULT_GLASSES_STATE, DEFAULT_RING_STATE, DEFAULT_COMPLEX_STATE } from
 import ComplexConfigurator from './ComplexConfigurator';
 import RingConfigurator from './RingConfigurator';
 import GlassesConfigurator from './GlassesConfigurator';
+import VirtualTryOn from './VirtualTryOn'; // <-- NEW IMPORT
 
 // ----------------------------------------------------------------------------
 // STATIC DATA
@@ -73,7 +74,7 @@ function ModelSelector({ activeTab, glassesConfig, ringConfig, complexConfig, pr
     case 'complex_jewelry':
       return <ComplexRingModel key="complex" config={complexConfig} {...commonProps} rotation={activeProduct.modelRotation} />;
     case 'jewelry':
-      return <RingModel key="jewelry" config={ringConfig} {...commonProps} />; // <-- Pass ringConfig here
+      return <RingModel key="jewelry" config={ringConfig} {...commonProps} />;
     case 'glasses':
     default:
       return <GlassesModel key="glasses" config={glassesConfig} {...commonProps} />;
@@ -85,14 +86,15 @@ function ModelSelector({ activeTab, glassesConfig, ringConfig, complexConfig, pr
 // ----------------------------------------------------------------------------
 export default function App() {
   // Application State
-  const [activeTab, setActiveTab] = useState('glasses'); // Defaulting to glasses to show off the configurator
+  const [activeTab, setActiveTab] = useState('glasses');
   const [mountModel, setMountModel] = useState(true);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [isARMode, setIsARMode] = useState(false); // <-- AR STATE ADDED
 
-  // Product Configurator State (The Brain)
+  // Product Configurator State
   const [glassesConfig, setGlassesConfig] = useState(DEFAULT_GLASSES_STATE);
   const [ringConfig, setRingConfig] = useState(DEFAULT_RING_STATE);
-  const [complexConfig, setComplexConfig] = useState(DEFAULT_COMPLEX_STATE); // <-- Add this
+  const [complexConfig, setComplexConfig] = useState(DEFAULT_COMPLEX_STATE);
 
   // WebGL Context Management
   const [contextLost, setContextLost] = useState(false);
@@ -127,6 +129,7 @@ export default function App() {
     if (navigator.vibrate) navigator.vibrate(10);
 
     setMountModel(false);
+    setIsARMode(false); // Reset AR mode when switching tabs
 
     // Clear caches for seamless memory transitions
     useGLTF.clear('/glasses-transformed.glb');
@@ -167,77 +170,86 @@ export default function App() {
         <span>{toast.message}</span>
       </div>
 
-      {/* 3D Canvas Layer */}
-      <div className="canvas-container">
-        <Canvas
-          key={canvasKey} // Safe, stable key
-          camera={{ position: [0, 1, 4], fov: 45, near: 0.1, far: 100 }}
-          dpr={[1, 1.5]}
-          gl={{
-            antialias: true,
-            powerPreference: "high-performance",
-            toneMappingExposure: 1.2,
-            preserveDrawingBuffer: false
-          }}
-          onCreated={({ gl }) => {
-            const canvas = gl.domElement;
-            canvas.addEventListener('webglcontextlost', handleContextLoss, false);
-            return () => canvas.removeEventListener('webglcontextlost', handleContextLoss);
-          }}
-        >
-          {/* SUSPENSE BOUNDARY */}
-          <Suspense fallback={<Html fullscreen><CanvasLoader /></Html>}>
-            {contextLost ? (
-              <Html center>
-                <div className="crash-overlay">
-                  <p>Viewer crashed due to high memory usage.</p>
-                  <button onClick={recoverContext}>Reload 3D Viewer</button>
-                </div>
-              </Html>
-            ) : (
-              <>
-                {/* Automatically change the lighting based on the active tab and configuration */}
-                {/* 1. Static Environment for reflections (Never reloads, no lag) */}
-                <Environment preset="city" background={false} />
+      {/* 3D Canvas / AR Layer */}
+      <div className="canvas-container" style={{ position: 'relative' }}>
+        
+        {/* AR Tracker OVERLAY */}
+        {isARMode && activeTab === 'glasses' && (
+          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 50 }}>
+            <VirtualTryOn config={glassesConfig} />
+          </div>
+        )}
 
-                {/* 2. Dynamic Ambient Light (Fills the shadows) */}
-                <ambientLight
-                  color={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientColor : '#ffffff'}
-                  intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientInt : 0.5}
-                />
+        {/* Main 3D Viewer - NEVER unmount this to prevent WebGL Context Leaks, 
+            instead we pause its render loop and hide it structurally */}
+        <div style={{
+          width: '100%', 
+          height: '100%',
+          opacity: (isARMode && activeTab === 'glasses') ? 0 : 1,
+          pointerEvents: (isARMode && activeTab === 'glasses') ? 'none' : 'auto'
+        }}>
+          <Canvas
+            frameloop={(isARMode && activeTab === 'glasses') ? 'demand' : 'always'}
+            key={canvasKey}
+            camera={{ position: [0, 1, 4], fov: 45, near: 0.1, far: 100 }}
+            dpr={[1, 1.5]}
+            gl={{
+              antialias: true,
+              powerPreference: "high-performance",
+              toneMappingExposure: 1.2,
+              preserveDrawingBuffer: false
+            }}
+            onCreated={({ gl }) => {
+              const canvas = gl.domElement;
+              canvas.addEventListener('webglcontextlost', handleContextLoss, false);
+              return () => canvas.removeEventListener('webglcontextlost', handleContextLoss);
+            }}
+          >
+            <Suspense fallback={<Html fullscreen><CanvasLoader /></Html>}>
+              {contextLost ? (
+                <Html center>
+                  <div className="crash-overlay">
+                    <p>Viewer crashed due to high memory usage.</p>
+                    <button onClick={recoverContext}>Reload 3D Viewer</button>
+                  </div>
+                </Html>
+              ) : (
+                <>
+                  <Environment preset="city" background={false} />
+                  <ambientLight
+                    color={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientColor : '#ffffff'}
+                    intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.ambientInt : 0.5}
+                  />
+                  <spotLight
+                    position={[5, 10, 5]}
+                    penumbra={1}
+                    angle={0.3}
+                    castShadow
+                    color={activeTab === 'complex_jewelry' ? complexConfig.environment.spotColor : '#ffffff'}
+                    intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.spotInt : 2}
+                  />
+                  <pointLight position={[-5, -5, -5]} intensity={0.5} color="#0066ff" />
 
-                {/* 3. Dynamic Spot Light (Creates the dramatic highlights) */}
-                <spotLight
-                  position={[5, 10, 5]}
-                  penumbra={1}
-                  angle={0.3}
-                  castShadow
-                  color={activeTab === 'complex_jewelry' ? complexConfig.environment.spotColor : '#ffffff'}
-                  intensity={activeTab === 'complex_jewelry' ? complexConfig.environment.spotInt : 2}
-                />
+                  <SmartOrbitControls minDistance={activeProduct.minDistance} maxDistance={activeProduct.maxDistance} />
 
-                {/* 4. A tiny blue rim light from below to make the diamonds pop */}
-                <pointLight position={[-5, -5, -5]} intensity={0.5} color="#0066ff" />
+                  <Center position={[0, -0.2, 0]}>
+                    {mountModel && (
+                      <ModelSelector
+                        activeTab={activeTab}
+                        glassesConfig={glassesConfig}
+                        ringConfig={ringConfig}
+                        complexConfig={complexConfig}
+                        productData={PRODUCT_DATA}
+                      />
+                    )}
+                  </Center>
 
-                <SmartOrbitControls minDistance={activeProduct.minDistance} maxDistance={activeProduct.maxDistance} />
-
-                <Center position={[0, -0.2, 0]}>
-                  {mountModel && (
-                    <ModelSelector
-                      activeTab={activeTab}
-                      glassesConfig={glassesConfig}
-                      ringConfig={ringConfig}
-                      complexConfig={complexConfig}
-                      productData={PRODUCT_DATA}
-                    />
-                  )}
-                </Center>
-
-                <ContactShadows position={[0, -0.8, 0]} opacity={0.4} scale={10} blur={2} far={2} frames={1} />
-              </>
-            )}
-          </Suspense>
-        </Canvas>
+                  <ContactShadows position={[0, -0.8, 0]} opacity={0.4} scale={10} blur={2} far={2} frames={1} />
+                </>
+              )}
+            </Suspense>
+          </Canvas>
+        </div>
       </div>
 
       {/* UI Navigation Layer */}
@@ -261,9 +273,27 @@ export default function App() {
               <p className="subtitle">{activeProduct.subtitle}</p>
               <h1 className="title">{activeProduct.title}</h1>
             </div>
-            <button onClick={handleShare} className="share-btn" aria-label="Share">
-              <Share2 size={18} />
-            </button>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {/* AR TOGGLE BUTTON */}
+              {activeTab === 'glasses' && (
+                <button
+                  onClick={() => setIsARMode(!isARMode)}
+                  className="share-btn"
+                  aria-label="Virtual Try-On"
+                  style={{
+                    background: isARMode ? '#ff3b30' : '#f0f0f0',
+                    color: isARMode ? '#fff' : '#000'
+                  }}
+                >
+                  <ScanFace size={18} />
+                </button>
+              )}
+
+              <button onClick={handleShare} className="share-btn" aria-label="Share">
+                <Share2 size={18} />
+              </button>
+            </div>
           </div>
 
           <p className="description">{activeProduct.description}</p>
@@ -271,24 +301,15 @@ export default function App() {
 
           {/* DYNAMIC UI INJECTION */}
           {activeTab === 'glasses' && (
-            <GlassesConfigurator
-              config={glassesConfig}
-              setConfig={setGlassesConfig}
-            />
+            <GlassesConfigurator config={glassesConfig} setConfig={setGlassesConfig} />
           )}
 
           {activeTab === 'jewelry' && (
-            <RingConfigurator
-              config={ringConfig}
-              setConfig={setRingConfig}
-            />
+            <RingConfigurator config={ringConfig} setConfig={setRingConfig} />
           )}
 
           {activeTab === 'complex_jewelry' && (
-            <ComplexConfigurator
-              config={complexConfig}
-              setConfig={setComplexConfig}
-            />
+            <ComplexConfigurator config={complexConfig} setConfig={setComplexConfig} />
           )}
 
           <button className="checkout-btn" onClick={handleCheckout} disabled={isCheckingOut} style={{ marginTop: activeTab === 'glasses' ? '24px' : 'auto' }}>
