@@ -2,87 +2,141 @@ import React, { useEffect, useRef, useState, Suspense } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Environment } from '@react-three/drei';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+import { Upload, Camera, AlertCircle } from 'lucide-react';
 import { Model as GlassesModel } from './Glasses';
-import { Upload, Camera } from 'lucide-react';
-import './VirtualTryOn.css';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FACE TRACKER (Fortified for Production)
-// ─────────────────────────────────────────────────────────────────────────────
-let globalTimestamp = 0; // Guaranteed strictly increasing timestamp to prevent crashes
+// ============================================================================
+// 🛠️ IbtikarZ MASTER CALIBRATION
+// Tweak these numbers to fit your specific .glb model.
+// ============================================================================
+const CALIBRATION = {
+    // 1. SIZE
+    scaleMultiplier: 0.15, // Change to 0.08 if too big, 0.25 if too small
 
-function FaceTracker({ videoRef, imageRef, glassesConfig, mode, imageSrc, onFaceStatus, retryKey }) {
+    // 2. POSITION (Move the glasses around your face)
+    offsetX: 0,
+    offsetY: -0.15, // Negative moves glasses down your nose
+    offsetZ: 1.5,   // Pushes glasses forward so handles don't clip into your cheeks
+
+    // 3. ROTATION (Math.PI = 180 degrees, Math.PI/2 = 90 degrees)
+    flipX: Math.PI, // Flips the handles forward/backward
+    flipY: 0,
+    flipZ: 0
+};
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// FACE TRACKER (The AI Engine)
+// ----------------------------------------------------------------------------
+let monotonicTimestamp = 0; // Strictly increasing timestamp prevents MediaPipe crashes
+
+function FaceTracker({ videoRef, imageRef, glassesConfig, mode, onStatusChange }) {
     const { viewport } = useThree();
     const glassesRef = useRef();
     const landmarkerRef = useRef(null);
-    const [isLoaded, setIsLoaded] = useState(false);
+    const [isReady, setIsReady] = useState(false);
 
-    // 1. Boot up MediaPipe 
+    // Boot MediaPipe
     useEffect(() => {
-        let mounted = true;
-        async function loadMp() {
+        let active = true;
+        async function loadAI() {
             try {
                 const fileset = await FilesetResolver.forVisionTasks(
                     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
                 );
-                landmarkerRef.current = await FaceLandmarker.createFromOptions(fileset, {
+                const landmarker = await FaceLandmarker.createFromOptions(fileset, {
                     baseOptions: {
                         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                        delegate: "CPU" // Keeping your CPU delegate to protect WebGL memory
+                        delegate: "CPU" // CPU prevents WebGL memory exhaustion
                     },
                     outputFaceBlendshapes: false,
-                    runningMode: "VIDEO", // STRICTLY LOCKED TO VIDEO
-                    numFaces: 1,
-                    minFaceDetectionConfidence: 0.1,
-                    minFacePresenceConfidence: 0.1,
-                    minTrackingConfidence: 0.1
+                    runningMode: "VIDEO", // We lock it to VIDEO to prevent state-switching crashes
+                    numFaces: 1
                 });
-                if (mounted) setIsLoaded(true);
+
+                if (!active) {
+                    landmarker.close();
+                    return;
+                }
+
+                landmarkerRef.current = landmarker;
+                setIsReady(true);
             } catch (err) {
-                console.error("[IbtikarZ Debug] MediaPipe init failed:", err);
+                console.error("[IbtikarZ System] AI Boot Failure:", err);
             }
         }
-        loadMp();
+        loadAI();
         return () => {
-            mounted = false;
+            active = false;
             if (landmarkerRef.current) landmarkerRef.current.close();
         };
     }, []);
 
-    // 2. UNIFIED DETECTION FRAME LOOP
+    // The Render Loop
     useFrame(() => {
-        if (!isLoaded || !landmarkerRef.current || !glassesRef.current) return;
+        if (!isReady || !landmarkerRef.current || !glassesRef.current) return;
 
         let landmarks = null;
-        // Synthetic time increment completely eliminates the "monotonic timestamp" crash
-        globalTimestamp += 16;
+        monotonicTimestamp += 16; // Fake video time prevents timestamp collision crashes
 
         try {
             // WEBCAM MODE
             if (mode === 'video' && videoRef.current && videoRef.current.readyState >= 2) {
-                const results = landmarkerRef.current.detectForVideo(videoRef.current, globalTimestamp);
-                if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-                    landmarks = results.faceLandmarks[0];
-                }
+                const results = landmarkerRef.current.detectForVideo(videoRef.current, monotonicTimestamp);
+                if (results.faceLandmarks?.length > 0) landmarks = results.faceLandmarks[0];
             }
-            // IMAGE MODE (Trick the AI into thinking the image is just a video frame)
+            // IMAGE MODE (We trick the AI into scanning the image as a single video frame)
             else if (mode === 'image' && imageRef.current && imageRef.current.complete) {
-                const results = landmarkerRef.current.detectForVideo(imageRef.current, globalTimestamp);
-                if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-                    landmarks = results.faceLandmarks[0];
-                }
+                const results = landmarkerRef.current.detectForVideo(imageRef.current, monotonicTimestamp);
+                if (results.faceLandmarks?.length > 0) landmarks = results.faceLandmarks[0];
             }
         } catch (err) {
-            // If it crashes now, it will actually tell you why in the browser console
-            console.error("[IbtikarZ Debug] Frame Detection Error:", err);
+            console.error("[IbtikarZ System] Tracking frame dropped:", err);
         }
 
-        // Immediately unblock the UI "Downloading AI Matrix..." screen
-        onFaceStatus?.(!!landmarks);
+        onStatusChange(!!landmarks);
 
-        // Apply math to 3D model
+        // Apply Math to Model
         if (landmarks) {
-            placeGlasses(landmarks, glassesRef.current, viewport, mode);
+            const noseBridge = landmarks[168];
+            const leftEye = landmarks[33];
+            const rightEye = landmarks[263];
+            const topFace = landmarks[10];
+            const bottomFace = landmarks[152];
+
+            // CSS flips the webcam horizontally, so we must invert our math
+            const mirror = mode === 'video' ? -1 : 1;
+
+            // Coordinate Mapping
+            const x = (noseBridge.x - 0.5) * viewport.width;
+            const y = -(noseBridge.y - 0.5) * viewport.height;
+            const z = -noseBridge.z * viewport.width;
+
+            glassesRef.current.position.set(
+                (x * mirror) + CALIBRATION.offsetX,
+                y + CALIBRATION.offsetY,
+                z + CALIBRATION.offsetZ
+            );
+
+            // Dynamic Scaling
+            const dx = rightEye.x - leftEye.x;
+            const dy = rightEye.y - leftEye.y;
+            const eyeDistance = Math.sqrt(dx * dx + dy * dy);
+
+            const finalScale = eyeDistance * viewport.width * CALIBRATION.scaleMultiplier;
+            glassesRef.current.scale.set(finalScale, finalScale, finalScale);
+
+            // 3D Rotation Math
+            const angleZ = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+            const angleY = Math.atan2(leftEye.z - rightEye.z, leftEye.x - rightEye.x);
+            const angleX = Math.atan2(topFace.z - bottomFace.z, topFace.y - bottomFace.y);
+
+            glassesRef.current.rotation.set(
+                -angleX + CALIBRATION.flipX,
+                (-angleY * mirror) + CALIBRATION.flipY,
+                (-angleZ * mirror) + CALIBRATION.flipZ
+            );
+
             glassesRef.current.visible = true;
         } else {
             glassesRef.current.visible = false;
@@ -92,155 +146,93 @@ function FaceTracker({ videoRef, imageRef, glassesConfig, mode, imageSrc, onFace
     return (
         <group ref={glassesRef} visible={false}>
             <GlassesModel config={glassesConfig} />
-            <mesh position={[0, 0, -1]}>
-                <sphereGeometry args={[0.08, 16, 16]} />
-                <meshBasicMaterial color="#3b82f6" transparent opacity={0.6} />
-            </mesh>
         </group>
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MATH: Landmarker -> 3D Space coordinate mapper
-// ─────────────────────────────────────────────────────────────────────────────
-function placeGlasses(landmarks, group, viewport, mode) {
-    // Core MediaPipe Landmark Indices
-    const noseBridge = landmarks[168];
-    const leftEye = landmarks[33];
-    const rightEye = landmarks[263];
-
-    // TUNING CONSTANTS
-    const BASE_SCALE = 0.28;
-    const OFFSET_X = 0;
-    const OFFSET_Y = 0.12;
-    const OFFSET_Z = 1.0;
-
-    // CSS automatically mirrors the HTML video tag. We must undo that flip mathematically.
-    const mirror = mode === 'video' ? -1 : 1;
-
-    // Transform normalized [0, 1] device-coordinates to Three.js Viewport units
-    const x = (noseBridge.x - 0.5) * viewport.width;
-    const y = -(noseBridge.y - 0.5) * viewport.height;
-
-    // Scale depth drastically down since it can cause jitter on z-buffering
-    const z = -(noseBridge.z || 0) * viewport.width * 0.5;
-
-    group.position.set(x * mirror + OFFSET_X, y + OFFSET_Y, z + OFFSET_Z);
-
-    // Depth-aware scaling based on inter-pupillary distance
-    const dX = rightEye.x - leftEye.x;
-    const dY = rightEye.y - leftEye.y;
-    const eyeD = Math.sqrt(dX * dX + dY * dY);
-    group.scale.setScalar(eyeD * viewport.width * BASE_SCALE);
-
-    // Robust Z-tilt logic. Removed Pitch/Yaw as it induces jitter on webcams.
-    const angleZ = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
-    group.rotation.set(0, 0, -angleZ * mirror);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UI WRAPPER COMPONENT
-// ─────────────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------------
+// MAIN UI COMPONENT (The Chassis)
+// ----------------------------------------------------------------------------
 export default function VirtualTryOn({ config }) {
     const videoRef = useRef(null);
     const imageRef = useRef(null);
-
     const [mode, setMode] = useState('video');
     const [imageSrc, setImageSrc] = useState(null);
-    const [faceVisible, setFaceVisible] = useState(false);
-    const [mpLoaded, setMpLoaded] = useState(false);
-    const [mediaSize, setMediaSize] = useState({ w: 4, h: 3 });
-    const [retryKey, setRetryKey] = useState(0);
+    const [aspectRatio, setAspectRatio] = useState('3/4'); // Default fallback
+    const [isTracking, setIsTracking] = useState(false);
 
-    // Hardware camera stream initialization hook
+    // Hardware Manager
     useEffect(() => {
-        if (mode !== 'video') return;
-        if (!navigator.mediaDevices?.getUserMedia) {
-            alert("Your browser does not support webcam access.");
-            setMode('image');
-            return;
-        }
-
         let stream = null;
 
-        // Match the camera physical format to the UI window strictly to avoid UI messes
-        const targetAR = window.innerWidth / window.innerHeight;
+        if (mode === 'video' && navigator.mediaDevices?.getUserMedia) {
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+                .then((s) => {
+                    stream = s;
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = stream;
+                    }
+                })
+                .catch(() => alert("Camera blocked or unavailable. Switch to Image Upload."));
+        }
 
-        navigator.mediaDevices
-            .getUserMedia({
-                video: {
-                    facingMode: 'user',
-                    aspectRatio: targetAR
-                }
-            })
-            .then(s => {
-                stream = s;
-                if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    videoRef.current.play().catch(e => console.error("[Play Error]", e));
-                }
-            })
-            .catch(err => {
-                console.error('[VirtualTryOn] Hardware access denied:', err);
-                alert("Camera access was denied. Switching to Image Upload mode.");
-                setMode('image');
-            });
+        // Hardware cleanup is mandatory to prevent ghost webcams
+        return () => {
+            if (stream) stream.getTracks().forEach(t => t.stop());
+        };
+    }, [mode]);
 
-        return () => stream?.getTracks().forEach(t => t.stop());
-    }, [mode, retryKey]);
-
-    function handleImageUpload(e) {
+    const handleUpload = (e) => {
         const file = e.target.files[0];
-        if (!file) return;
-        setImageSrc(URL.createObjectURL(file));
-        setFaceVisible(false);
-        setMode('image');
-        setRetryKey(0);
-    }
-
-    function handleWebcamMode() {
-        setFaceVisible(false);
-        setMode('video');
-        setRetryKey(k => k + 1);
-    }
+        if (file) {
+            setImageSrc(URL.createObjectURL(file));
+            setMode('image');
+        }
+    };
 
     return (
-        <div className="vto-root" style={{ width: '100%', height: '100%', position: 'relative' }}>
-            <div
-                className="vto-aspect-box"
-                style={{
-                    position: 'absolute',
-                    inset: 0,
-                    width: '100%',
-                    height: '100%',
-                    overflow: 'hidden'
-                }}
-            >
+        <div style={{
+            width: '100%', height: '100%', backgroundColor: '#0f1115',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            position: 'relative', overflow: 'hidden', borderRadius: '12px'
+        }}>
+
+            {/* THE ASPECT RATIO LOCK:
+              This guarantees the 3D Canvas exactly overlays the video pixels.
+              No resizing bugs. No floating glasses.
+            */}
+            <div style={{
+                position: 'relative',
+                width: '100%',
+                maxHeight: '100%',
+                aspectRatio: aspectRatio,
+                backgroundColor: '#000'
+            }}>
+
+                {/* Media Layer */}
                 {mode === 'video' ? (
                     <video
-                        id="vto-video"
                         ref={videoRef}
-                        className="vto-video"
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        autoPlay
-                        playsInline
-                        muted
-                        onLoadedMetadata={e => setMediaSize({ w: e.target.videoWidth, h: e.target.videoHeight })}
+                        autoPlay playsInline muted
+                        onLoadedMetadata={(e) => setAspectRatio(`${e.target.videoWidth}/${e.target.videoHeight}`)}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
                     />
                 ) : (
                     <img
-                        id="vto-image"
                         ref={imageRef}
-                        className="vto-image"
                         src={imageSrc}
-                        alt="Your uploaded photo"
-                        crossOrigin="anonymous"
-                        onLoad={e => setMediaSize({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
+                        alt="User"
+                        onLoad={(e) => setAspectRatio(`${e.target.naturalWidth}/${e.target.naturalHeight}`)}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />
                 )}
 
-                <Canvas className="vto-canvas" camera={{ position: [0, 0, 5], fov: 45 }}>
-                    <ambientLight intensity={1} />
+                {/* 3D Render Layer */}
+                <Canvas
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                    camera={{ position: [0, 0, 5], fov: 45 }}
+                >
+                    <ambientLight intensity={1.5} />
                     <directionalLight position={[0, 5, 5]} intensity={2} />
                     <Environment preset="city" />
 
@@ -250,65 +242,51 @@ export default function VirtualTryOn({ config }) {
                             imageRef={imageRef}
                             glassesConfig={config}
                             mode={mode}
-                            imageSrc={imageSrc}
-                            retryKey={retryKey}
-                            onFaceStatus={detected => {
-                                if (!mpLoaded) setMpLoaded(true);
-                                setFaceVisible(detected);
-                            }}
+                            onStatusChange={setIsTracking}
                         />
                     </Suspense>
                 </Canvas>
 
-                {!mpLoaded && (
-                    <div className="vto-status-badge" role="status" aria-live="polite">
-                        <span className="vto-spinner" />
-                        Downloading AI Matrix...
-                    </div>
-                )}
-
-                {mpLoaded && faceVisible && (
-                    <div className="vto-face-detected-badge" role="status" aria-live="polite">
-                        <div className="vto-blue-circle" aria-hidden="true" />
-                        Face Locked
-                    </div>
-                )}
-
-                {mpLoaded && !faceVisible && (
-                    <div className="vto-no-face-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span>{mode === 'video' ? 'Bring your face into view' : 'Could not locate a face'}</span>
-                        {mode === 'image' && (
-                            <button
-                                onClick={() => setRetryKey(k => k + 1)}
-                                style={{
-                                    background: '#fff', color: '#000', border: 'none',
-                                    padding: '4px 10px', borderRadius: '12px',
-                                    fontSize: '11px', fontWeight: 'bold', cursor: 'pointer'
-                                }}
-                            >
-                                Re-Scan
-                            </button>
-                        )}
+                {/* Face Detection Warning */}
+                {!isTracking && mode === 'image' && imageSrc && (
+                    <div style={{
+                        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                        background: 'rgba(220, 38, 38, 0.9)', color: '#fff', padding: '12px 24px',
+                        borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold'
+                    }}>
+                        <AlertCircle size={20} /> No face detected. Try a clearer photo.
                     </div>
                 )}
             </div>
 
-            <div className="vto-controls" role="toolbar">
+            {/* Action Bar */}
+            <div style={{
+                position: 'absolute', bottom: '24px', display: 'flex', gap: '12px',
+                background: 'rgba(0, 0, 0, 0.7)', padding: '8px', borderRadius: '30px',
+                backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)'
+            }}>
                 <button
-                    className={`vto-btn ${mode === 'video' ? 'vto-btn--active' : ''}`}
-                    onClick={handleWebcamMode}
+                    onClick={() => setMode('video')}
+                    style={{
+                        padding: '10px 20px', borderRadius: '24px', border: 'none',
+                        background: mode === 'video' ? '#fff' : 'transparent',
+                        color: mode === 'video' ? '#000' : '#fff',
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+                        fontWeight: 'bold', fontSize: '14px', transition: 'all 0.2s'
+                    }}
                 >
-                    <Camera size={15} /> Webcam
+                    <Camera size={16} /> Webcam
                 </button>
 
-                <label className={`vto-upload-label ${mode === 'image' ? 'vto-btn--active' : ''}`}>
-                    <Upload size={15} /> Upload
-                    <input
-                        type="file"
-                        accept="image/*"
-                        className="vto-file-input"
-                        onChange={handleImageUpload}
-                    />
+                <label style={{
+                    padding: '10px 20px', borderRadius: '24px', border: 'none',
+                    background: mode === 'image' ? '#fff' : 'transparent',
+                    color: mode === 'image' ? '#000' : '#fff',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+                    fontWeight: 'bold', fontSize: '14px', transition: 'all 0.2s'
+                }}>
+                    <Upload size={16} /> Upload Photo
+                    <input type="file" accept="image/jpeg, image/png, image/webp" onChange={handleUpload} style={{ display: 'none' }} />
                 </label>
             </div>
         </div>
