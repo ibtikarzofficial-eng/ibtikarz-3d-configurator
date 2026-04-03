@@ -264,7 +264,11 @@ export default function VirtualTryOn({ config }) {
             .getUserMedia({ video: { facingMode: 'user' } })
             .then(s => {
                 stream = s;
-                if (videoRef.current) videoRef.current.srcObject = stream;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    // Explicit play() is required on many Android browsers
+                    videoRef.current.play().catch(e => console.error("[Play Error] Mobile autoplay blocked:", e));
+                }
             })
             .catch(err => {
                 console.error('[VirtualTryOn] Camera access denied or not found:', err);
@@ -355,6 +359,14 @@ export default function VirtualTryOn({ config }) {
                     <div className="vto-status-badge" role="status" aria-live="polite">
                         <span className="vto-spinner" />
                         Loading face detection…
+                    </div>
+                )}
+
+                {/* Tracking badge — Shows a blue glowing circle when face is successfully locked */}
+                {mpLoaded && faceVisible && (
+                    <div className="vto-face-detected-badge" role="status" aria-live="polite">
+                        <div className="vto-blue-circle" aria-hidden="true" />
+                        Face Detected
                     </div>
                 )}
 
