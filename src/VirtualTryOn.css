@@ -163,7 +163,8 @@
 
 .vto-controls {
   position: absolute;
-  bottom: calc(50vh + 24px);
+  /* MOBILE FIX: product card is max 42vh, so this floats right above it */
+  bottom: calc(42vh + 20px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 20;
