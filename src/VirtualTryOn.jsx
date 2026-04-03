@@ -23,9 +23,9 @@ function FaceTracker({ videoRef, imageRef, glassesConfig, mode, imageSrc, onFace
         let mounted = true;
         async function loadMp() {
             try {
-                // High-performance WebAssembly fileset
+                // Explicitly targeting the exact installed version. @latest causes CDN 404s for subdirectories.
                 const fileset = await FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/wasm"
                 );
                 landmarkerRef.current = await FaceLandmarker.createFromOptions(fileset, {
                     baseOptions: {
@@ -151,7 +151,9 @@ function placeGlasses(landmarks, group, viewport, mode) {
     // Transform normalized [0, 1] device-coordinates to Three.js Viewport units
     const x = (noseBridge.x - 0.5) * viewport.width;
     const y = -(noseBridge.y - 0.5) * viewport.height;
-    const z = -(noseBridge.z || 0) * viewport.width;
+    
+    // Scale depth drastically down since it can cause jitter on z-buffering
+    const z = -(noseBridge.z || 0) * viewport.width * 0.5;
 
     group.position.set(x * mirror + OFFSET_X, y + OFFSET_Y, z + OFFSET_Z);
 
@@ -190,8 +192,17 @@ export default function VirtualTryOn({ config }) {
         }
 
         let stream = null;
+        
+        // Match the camera physical format to the UI window strictly to avoid UI messes
+        const targetAR = window.innerWidth / window.innerHeight;
+
         navigator.mediaDevices
-            .getUserMedia({ video: { facingMode: 'user' } })
+            .getUserMedia({ 
+                video: { 
+                    facingMode: 'user',
+                    aspectRatio: targetAR
+                } 
+            })
             .then(s => {
                 stream = s;
                 if (videoRef.current) {
@@ -224,13 +235,15 @@ export default function VirtualTryOn({ config }) {
     }
 
     return (
-        <div className="vto-root">
+        <div className="vto-root" style={{ width: '100%', height: '100%', position: 'relative' }}>
             <div
                 className="vto-aspect-box"
                 style={{ 
-                    aspectRatio: `${mediaSize.w} / ${mediaSize.h}`,
-                    width: mediaSize.w > mediaSize.h ? '100%' : 'auto',
-                    height: mediaSize.h >= mediaSize.w ? '100%' : 'auto'
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    overflow: 'hidden'
                 }}
             >
                 {mode === 'video' ? (
@@ -238,6 +251,7 @@ export default function VirtualTryOn({ config }) {
                         id="vto-video"
                         ref={videoRef}
                         className="vto-video"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         autoPlay
                         playsInline
                         muted
