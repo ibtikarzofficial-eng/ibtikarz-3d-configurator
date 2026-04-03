@@ -52,6 +52,11 @@ html {
   }
 }
 
+/* FULLSCREEN AR MODE ON MOBILE */
+.app-wrapper.ar-mode .canvas-container {
+  height: 100dvh;
+}
+
 /* ----------------------------------- */
 /* TOP NAVIGATION                      */
 /* ----------------------------------- */

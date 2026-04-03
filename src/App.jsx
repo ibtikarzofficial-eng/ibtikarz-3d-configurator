@@ -164,7 +164,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app-wrapper">
+    <div className={`app-wrapper ${isARMode && activeTab === 'glasses' ? 'ar-mode' : ''}`}>
       <div className={`toast ${toast.type} ${toast.visible ? 'visible' : ''}`}>
         {toast.type === 'success' && <Check size={16} />}
         <span>{toast.message}</span>
